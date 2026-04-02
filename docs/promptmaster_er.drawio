@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-04-02T00:00:00.000Z" agent="Cursor" version="23.0.6" type="device">
+  <diagram id="PromptMasterERD" name="ERD">
+    <mxGraphModel dx="1424" dy="840" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="2" value="PromptMaster - ER Diagram (MVP)" style="rounded=0;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#ffffff;strokeColor=#000000;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="260" y="20" width="580" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- users -->
+        <mxCell id="10" value="users&#xa;telegram_user_id (PK)&#xa;name/locale&#xa;access_level&#xa;created_at&#xa;updated_at" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="90" width="320" height="240" as="geometry"/>
+        </mxCell>
+
+        <!-- prompts -->
+        <mxCell id="20" value="prompts&#xa;prompt_id (PK)&#xa;telegram_user_id (FK)&#xa;input_payload&#xa;prompt_text&#xa;model&#xa;created_at" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fillColor=#d5e8d4;strokeColor=#82b366;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="440" y="110" width="420" height="270" as="geometry"/>
+        </mxCell>
+
+        <!-- payments -->
+        <mxCell id="30" value="payments&#xa;payment_id (PK)&#xa;telegram_user_id (FK)&#xa;yookassa_payment_id&#xa;amount&#xa;status&#xa;created_at&#xa;updated_at" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="360" width="420" height="310" as="geometry"/>
+        </mxCell>
+
+        <!-- relationships: users (1) -> prompts (N) -->
+        <mxCell id="40" value="1..N" style="endArrow=block;html=1;strokeColor=#000000;strokeWidth=1;fontSize=12;labelBackgroundColor=none;align=center;verticalAlign=middle;" edge="1" parent="1" source="10" target="20">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="400" y="220" as="sourcePoint"/>
+            <mxPoint x="440" y="240" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- relationships: users (1) -> payments (N) -->
+        <mxCell id="50" value="1..N" style="endArrow=block;html=1;strokeColor=#000000;strokeWidth=1;fontSize=12;labelBackgroundColor=none;align=center;verticalAlign=middle;" edge="1" parent="1" source="10" target="30">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="250" y="330" as="sourcePoint"/>
+            <mxPoint x="240" y="370" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
+

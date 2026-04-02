@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Unit tests / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Builds / distributions
+build/
+dist/
+
+# Type checking
+.mypy_cache/
+
+# Django / Flask (if used later)
+*.sqlite3
+
+# Environment variables / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Logs
+*.log
+
+# IDE/editor
+.vscode/
+.idea/
+.cursor/
+
+# OS
+Thumbs.db
+.DS_Store
+
