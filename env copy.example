@@ -1,0 +1,143 @@
+# Copy this file to .env and fill in your API key.
+OPENAI_API_KEY=sk-xxx
+# Optional: override if not using the default proxy
+OPENAI_BASE_URL=https://api.proxyapi.ru/openai/v1
+# Optional: default model
+OPENAI_MODEL=gpt-4o
+# Optional: default system prompt for the agent
+AGENT_SYSTEM_PROMPT=
+# Optional: language mirroring hint for agent
+AGENT_LANG_HINT=Always respond in the same language as the user's last message.
+
+# Optional: menu of models for build_prompt.py (comma-separated)
+MODEL_MENU=gpt-4o-mini,gpt-4o,claude-3-5-sonnet,claude-3-5-haiku,yandexgpt-lite,yandexgpt-pro,gigachat,qwen2.5-72b-instruct,glm-4,baichuan2-53b,yi-large,deepseek-chat,moonshot-v1-8k
+# Tip: если задать OPENAI_MODEL цифрой (например, 2) или передать --model 2,
+# и при этом определён MODEL_MENU — будет выбран соответствующий пункт меню.
+
+# Fixed API model for PromptBuilder (все запросы к API идут в эту модель)
+# Целевую модель выбираете в мастере — она учитывается в содержимом промпта (адаптация),
+# но не в реальном вызове API.
+PROMPT_BUILDER_API_MODEL=gpt-4o
+
+# ============================
+# Prompt Builder system prompts
+# You can paste multi-line text by using PowerShell here-strings when writing .env
+# ============================
+# Goal classifier prompt (supports {user_input})
+GOAL_CLASSIFIER_PROMPT="Ты классификатор целей для генерации промптов. Анализируй запрос: \"{user_input}\"\r
+\r
+ВОЗМОЖНЫЕ ЦЕЛИ: article, code, analysis, creative, Q&A, translation, summary\r
+\r
+Твоя задача:\r
+1) Определи цель (goal) и предполагаемую роль автора (role).\r
+2) Выдели необходимые параметры (fields) для качественного результата по этой цели.\r
+3) Проанализируй исходный запрос пользователя и ЗАПОЛНИ те параметры, которые уже явно указаны, в объекте \"provided\" (ключ → значение как в запросе).\r
+4) Сформируй \"missing_keys\" ТОЛЬКО из тех ключей, которые отсутствуют в \"provided\".\r
+\r
+Верни ТОЛЬКО JSON:\r
+{\r
+  \"goal\": \"article\",\r
+  \"role\": \"технический писатель\",\r
+  \"fields\": [\r
+    {\"key\": \"length\", \"question\": \"Какой объём текста нужен?\", \"example\": \"1000-1500 слов\", \"required\": true},\r
+    {\"key\": \"style\", \"question\": \"Какой стиль?\", \"example\": \"научпоп / разговорный / формальный\", \"required\": true},\r
+    {\"key\": \"audience\", \"question\": \"Кто аудитория?\", \"example\": \"инженеры-студенты\", \"required\": true},\r
+    {\"key\": \"tone\", \"question\": \"Тональность?\", \"example\": \"воодушевляющий / нейтральный\", \"required\": false}\r
+  ],\r
+  \"provided\": {\"length\": \"1000-1500 слов\", \"style\": \"научпоп\"},\r
+  \"missing_keys\": [\"audience\"]\r
+}\r
+\r
+Примеры:\r
+\"напиши код\" → {\r
+  \"goal\": \"code\", \"role\": \"программист\",\r
+  \"fields\": [\r
+    {\"key\": \"language\", \"question\": \"Какой язык программирования?\", \"example\": \"Python\", \"required\": true},\r
+    {\"key\": \"io\", \"question\": \"Какой формат входа/выхода?\", \"example\": \"stdin/stdout\", \"required\": true}\r
+  ],\r
+  \"provided\": {},\r
+  \"missing_keys\": [\"language\",\"io\"]\r
+}\r
+\"проанализируй\" → {\r
+  \"goal\": \"analysis\", \"role\": \"аналитик\",\r
+  \"fields\": [\r
+    {\"key\": \"subject\", \"question\": \"Что именно анализировать?\", \"example\": \"отчёт продаж Q1\", \"required\": true},\r
+    {\"key\": \"metrics\", \"question\": \"Какие метрики важны?\", \"example\": \"выручка, маржа\", \"required\": false}\r
+  ],\r
+  \"provided\": {\"metrics\": \"выручка, маржа\"},\r
+  \"missing_keys\": [\"subject\"]\r
+}\r
+Всегда отвечай на языке исходного запроса пользователя."
+
+# Model adapter prompt (supports {model})
+MODEL_ADAPTER_PROMPT="Ты адаптер промптов под модели ИИ. Для модели \"{model}\" определи:\r
+\r
+- temperature (0.1-0.9)\r
+- structure (CoT, XML, JSON, few-shot)\r
+- language (ru/en)\r
+- special features\r
+\r
+ДОПОЛНИТЕЛЬНО: на основе переданной спецификации (goal/role/details) СФОРМИРУЙ заготовку для следующего этапа (верни в JSON, поле structured):\r
+- role_expert: \"Ты — [эксперт в ...]\"\r
+- task: \"Создай [что?] для [кого?]\"\r
+- context: \"Цель — [зачем?]\"\r
+- format: \"Ответ в виде [структура], до [объём]\"\r
+- style: \"Тон — [характер], избегай [ограничения]\"\r
+- example: \"Как референс: [пример]\" (если релевантно и кратко)\r
+\r
+Верни ТОЛЬКО JSON:\r
+{\"temp\": 0.3, \"structure\": \"CoT+XML\", \"lang\": \"ru\", \"features\": \"use <thinking> tags\"}\r
+\r
+Модели:\r
+- gpt-4o-mini: temp 0.7, few-shot\r
+- claude-3-5-sonnet: temp 0.3, CoT+XML  \r
+- yandexgpt-lite: temp 0.5, русский\r
+- gigachat: temp 0.4, формальный русский\r
+Всегда отвечай на языке исходного запроса пользователя."
+
+# Meta generator prompt (supports {model}, {goal}, {details}, {role}, {adapter_instructions}, {structure})
+META_GENERATOR_PROMPT="Ты лучший в мире prompt engineer. Создай ИДЕАЛЬНЫЙ промпт для модели \"{model}\".\r
+\r
+📋 Контекст пользователя:\r
+Goal: {goal}\r
+Детали: {details}\r
+Роль: {role}\r
+Адаптация: {adapter_instructions}\r
+\r
+✅ Требования к промпту:\r
+1. Роль + контекст + CoT (Think step-by-step)\r
+2. Output format (JSON/Markdown/table)\r
+3. 1–2 примера (few-shot)\r
+4. Длина 200–500 слов\r
+5. {structure} структура из адаптера\r
+6. Строго следуй теме и деталям из спецификации; не меняй тематику и формулировки пользователя.\r
+7. Если тема присутствует в спецификации — ИСПОЛЬЗУЙ ЕЁ БЕЗ ИЗМЕНЕНИЙ. Никаких альтернативных тем.\r
+\r
+Верни ТОЛЬКО JSON:\r
+{\"prompt\": \"Ты - {role}. {goal}...\", \"Почему это хорошо\": \"3 причины почему этот промпт отличный\", \"estimated_quality\": \"8.5/10\"}\r
+Всегда отвечай на языке исходного запроса пользователя и, если уместно, формируй промпт на том же языке."
+
+# Self-refine prompt (supports {original_prompt})
+SELF_REFINE_PROMPT="Ты критик промптов. Оцени промпт по шкале 1–10:\r
+\r
+📊 Критерии (веса):\r
+- Ясность инструкций (30%)\r
+- Структура CoT/logic (25%) \r
+- Output format (20%)\r
+- Few-shot примеры (15%)\r
+- Модель-адаптация (10%)\r
+\r
+Исходный промпт:\r
+{original_prompt}\r
+\r
+Верни ТОЛЬКО JSON:\r
+{\"score\": 8.2, \"critique\": \"Что плохо + почему\", \"refined_prompt\": \"Улучшенная версия\", \"improvements\": [\"1\", \"2\", \"3\"]}\r
+\r
+Улучшай ИТЕРАТИВНО, не ломай логику.\r
+Всегда отвечай на языке исходного запроса пользователя."
+
+# Role rules hint: diversify role selection depending on content type
+ROLE_RULES_HINT="Правила выбора роли (role):\r
+- Если запрос о постах для каналов/соцсетей/телеграма/блога — роль: \"администратор канала\" (или \"редактор канала\").\r
+- Если запрос о НАУЧНЫХ СТАТЬЯХ, исследовании, публикации — роль: \"доцент\" или \"профессор\" (выберите наиболее уместное).\r
+- В противном случае подбирай профессиональную роль по контексту (не всегда \"технический писатель\")."
