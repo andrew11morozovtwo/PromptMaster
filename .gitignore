@@ -29,6 +29,10 @@ dist/
 # Django / Flask (if used later)
 *.sqlite3
 
+# Локальная SQLite в data/ (каталог data/ в репозитории — через .gitkeep)
+data/*.db
+data/*.sqlite3
+
 # Environment variables / secrets
 .env
 .env.*
