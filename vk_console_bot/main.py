@@ -14,6 +14,7 @@ import random
 import re
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Final
 
 try:
@@ -38,6 +39,118 @@ _JOKES: Final[tuple[str, ...]] = (
 # Состояние диалога (в VK будет dict[peer_id, ...]).
 SESSION: dict[str, Any] = {}
 # Тексты инструкций для вызовов AI — в instructions.txt (get_instruction).
+
+# Возврат к теме: разработка промпта под запрос пользователя (основной сценарий — ветка 1).
+OFF_TOPIC_REDIRECT: Final[str] = (
+    "Похоже, мы немного ушли от темы. Давайте вернёмся к разработке промпта по вашему запросу. "
+    "Пожалуйста, опишите, что именно вы хотите получить от ИИ, чтобы я смог продолжить."
+)
+
+# Целые фразы (после нормализации), похожие на бытовой отвод от задачи «сформулировать промпт».
+_OFF_TOPIC_EXACT: Final[frozenset[str]] = frozenset(
+    {
+        "привет",
+        "привет!",
+        "здравствуй",
+        "здравствуйте",
+        "хай",
+        "hi",
+        "hello",
+        "hey",
+        "как дела",
+        "как дела?",
+        "что как",
+        "чо как",
+        "как ты",
+        "как ты?",
+        "как жизнь",
+        "как жизнь?",
+        "чем занят",
+        "чем занята",
+        "ты тут",
+        "ау",
+        "алло",
+        "добрый день",
+        "добрый вечер",
+        "доброе утро",
+        "погода",
+        "скажи погоду",
+        "расскажи анекдот",
+        "пошути",
+        "поболтаем",
+        "поговорим",
+        "не хочу",
+        "не знаю",
+        "ладно",
+        "ок",
+        "окей",
+        "давай другое",
+        "хватит",
+        "стоп",
+        "замолчи",
+        "ты кто",
+        "ты кто?",
+        "кто ты?",
+        "а ты кто",
+        "а ты кто?",
+    }
+)
+
+_OFF_TOPIC_START: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^как\s+дела\b", re.IGNORECASE),
+    re.compile(r"^что\s+нового\b", re.IGNORECASE),
+    re.compile(r"^как\s+настроение\b", re.IGNORECASE),
+    re.compile(r"^(кто\s+ты|ты\s+кто|что\s+ты\s+за|ты\s+бот)\b", re.IGNORECASE),
+    re.compile(r"^расскажи\s+(про\s+себя|сказку)\b", re.IGNORECASE),
+    re.compile(r"^давай\s+про\s+", re.IGNORECASE),
+)
+
+# Вводные слова в начале реплики («а ты кто?»), после снятия проверяем ядро фразы.
+_LEADING_CHATTER_PREFIX: Final[re.Pattern[str]] = re.compile(
+    r"^(?:а|ну|ээ|эй|слушай(?:те)?|скажи(?:те)?|пожалуйста|извини(?:те)?|прости)\b[,!\s]*",
+    re.IGNORECASE,
+)
+
+
+def _normalize_user_line(text: str) -> str:
+    t = (text or "").strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def _strip_leading_chatter_prefixes(t: str) -> str:
+    s = t
+    while True:
+        m = _LEADING_CHATTER_PREFIX.match(s)
+        if not m:
+            break
+        s = s[m.end() :].strip()
+        if not s:
+            break
+    return s
+
+
+def is_off_topic_user_input(text: str) -> bool:
+    """
+    Грубая эвристика: сообщение не похоже на формулировку задачи для ИИ, а на отвод разговора.
+    Не вызывает API; длинные осмысленные тексты не режем.
+    """
+    t = _normalize_user_line(text)
+    if not t:
+        return False
+    if len(t) > 160:
+        return False
+    if t in _OFF_TOPIC_EXACT:
+        return True
+    core = _strip_leading_chatter_prefixes(t)
+    if not core:
+        return False
+    if core in _OFF_TOPIC_EXACT:
+        return True
+    # Ядро после «а/ну/…» короче; лимит по полной строке уже отсекает длинные тексты.
+    if len(core) <= 48 and any(p.match(core) for p in _OFF_TOPIC_START):
+        return True
+    return False
 
 
 def read_env() -> None:
@@ -183,29 +296,71 @@ def _append_stage3_refinement(
     )
 
 
-def _stub_other_branch(classifier: dict[str, Any], branch: int) -> str:
-    next_step = classifier.get("next_step", "—")
-    return (
-        f"[Заглушка] Классификатор определил ветку {branch} ({next_step}). "
-        "Обработка для этой ветки пока не подключена.\n\n"
-        "Отправьте новый запрос или /menu."
-    )
+def _stub_other_branch(_classifier: dict[str, Any], _branch: int) -> str:
+    return OFF_TOPIC_REDIRECT
 
 
-def run_prompt_pipeline(
+STAGE3_REFINEMENT_PROMPT_CONSOLE: Final[str] = (
+    "Что-то уточнить? Пустой ввод — закончить уточнения."
+)
+STAGE3_REFINEMENT_PROMPT_VK: Final[str] = (
+    "Что-то уточнить? Напишите уточнение к промпту или нажмите «Готово», чтобы закончить."
+)
+
+# Метки клавиатуры для vk_dispatch_sync (второй аргумент emit).
+VK_KB_BRANCH_MENU: Final[str] = "branch_menu"
+VK_KB_REFINEMENT_DONE: Final[str] = "refinement_done"
+# JSON улучшителя — без меню веток (пустая inline-клавиатура).
+VK_KB_JSON_NO_MENU: Final[str] = "json_no_menu"
+# То же меню веток, но текст — полное приветствие VK (подпись про серые кнопки уже внутри).
+VK_KB_BRANCH_MENU_WELCOME: Final[str] = "branch_menu_welcome"
+
+REFINEMENT_DONE_CMDS: Final[frozenset[str]] = frozenset(
+    {
+        "готово",
+        "готово.",  # с точкой, если клиент VK добавит
+        "достаточно",
+        "хватит",
+        "/done",
+        ".",
+        "ok",
+        "ок",
+        "окей",
+        "спасибо, достаточно",
+    }
+)
+
+
+@dataclass
+class Stage3RefinementContext:
+    """Состояние цикла уточнения этапа 3 (для VK и внешних транспортов без input())."""
+
+    stage3_user: str
+    last_improver: dict[str, Any]
+    client: Any
+    model: str
+    system_improver: str
+
+
+@dataclass(frozen=True)
+class _FirstImproverOk:
+    improver_data: dict[str, Any]
+    stage3_user: str
+    client: Any
+    model: str
+    system_improver: str
+
+
+def _run_stages_through_first_improver(
     user_text: str,
     *,
-    stage3_emit: Callable[[str], None] | None = None,
-) -> str:
+    force_branch_1: bool = False,
+) -> str | _FirstImproverOk:
     """
-    Этап 1: классификатор (system_prompt).
-    Ветка 1: этап 2 — TEXT_EXTRACTION (в user только user_request из этапа 1);
-    этап 3 — PROMPT_IMPROVER + два JSON (исходная реплика + разбор этапа 2).
-    Итог при ветке 1: JSON этапа 3 (old_prompt, new_prompt, advantages). Иначе — заглушка.
+    Этапы 1–3 до первого успешного ответа улучшителя; иначе строка ошибки или редирект.
 
-    Если передан stage3_emit (консоль), после каждого JSON этапа 3 вызывается emit(json);
-    затем задаётся вопрос про уточнение; непустой ввод добавляется как comment_user и
-    запускается повторный этап 3, пока пользователь не отправит пустой ввод.
+    Если force_branch_1=True, этап классификатора пропускается (как при detected_branch=1, confidence=high);
+    в TEXT_EXTRACTION уходит весь user_text.
     """
     client = build_openai_client()
     if client is None:
@@ -217,33 +372,38 @@ def run_prompt_pipeline(
 
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
-    try:
-        system_cls = get_instruction("system_prompt")
-    except (FileNotFoundError, KeyError) as exc:
-        return f"Не удалось загрузить system_prompt из instructions.txt: {exc}"
-
-    try:
-        cls_data = _chat_json_completion(client, model, system_cls, user_text)
-    except Exception as exc:
-        return f"Ошибка классификатора (этап 1): {exc}"
-
-    branch = _normalize_branch(cls_data.get("detected_branch"))
-    if branch is None:
-        return (
-            "Классификатор вернул неожиданное значение detected_branch.\n"
-            f"(ответ этапа 1): {json.dumps(cls_data, ensure_ascii=False, indent=2)}\n\n"
-            "Отправьте новый запрос или /menu."
-        )
-
-    if branch != 1:
-        return _stub_other_branch(cls_data, branch)
-
-    user_req = cls_data.get("user_request")
-    if not isinstance(user_req, str):
-        user_req = ""
-    user_req = user_req.strip()
-    if not user_req:
+    if force_branch_1:
         user_req = user_text.strip()
+        if not user_req:
+            return "Опишите запрос текстом."
+    else:
+        try:
+            system_cls = get_instruction("system_prompt")
+        except (FileNotFoundError, KeyError) as exc:
+            return f"Не удалось загрузить system_prompt из instructions.txt: {exc}"
+
+        try:
+            cls_data = _chat_json_completion(client, model, system_cls, user_text)
+        except Exception as exc:
+            return f"Ошибка классификатора (этап 1): {exc}"
+
+        branch = _normalize_branch(cls_data.get("detected_branch"))
+        if branch is None:
+            return (
+                "Классификатор вернул неожиданное значение detected_branch.\n"
+                f"(ответ этапа 1): {json.dumps(cls_data, ensure_ascii=False, indent=2)}\n\n"
+                "Отправьте новый запрос или /menu."
+            )
+
+        if branch != 1:
+            return _stub_other_branch(cls_data, branch)
+
+        user_req = cls_data.get("user_request")
+        if not isinstance(user_req, str):
+            user_req = ""
+        user_req = user_req.strip()
+        if not user_req:
+            user_req = user_text.strip()
 
     try:
         system_txt = get_instruction("TEXT_EXTRACTION")
@@ -266,18 +426,152 @@ def run_prompt_pipeline(
     except Exception as exc:
         return f"Ошибка третьего этапа (улучшение промпта): {exc}"
 
+    return _FirstImproverOk(
+        improver_data=improver_data,
+        stage3_user=stage3_user,
+        client=client,
+        model=model,
+        system_improver=system_improver,
+    )
+
+
+def vk_dispatch_sync(
+    text: str,
+    emit: Callable[[str, str], None],
+    pending: Stage3RefinementContext | None,
+    *,
+    refinement_question: str = STAGE3_REFINEMENT_PROMPT_VK,
+    force_branch_1: bool = False,
+) -> Stage3RefinementContext | None:
+    """
+    Обработка одного сообщения в VK-сессии. Ответы через emit(text, keyboard_key):
+    VK_KB_BRANCH_MENU — меню веток; VK_KB_JSON_NO_MENU — ответ с промптом (JSON) без кнопок;
+    VK_KB_REFINEMENT_DONE — вопрос про уточнение и одна кнопка «Готово».
+    """
+    line = (text or "").strip()
+    cmd0 = line.split()[0].lower() if line else ""
+
+    def em(msg: str, kb: str = VK_KB_BRANCH_MENU) -> None:
+        emit(msg, kb)
+
+    if cmd0 in ("/menu", "/start", "меню"):
+        em(format_welcome_vk_menu_message(), VK_KB_BRANCH_MENU_WELCOME)
+        return None
+
+    if cmd0 == "/help":
+        em(cmd_help())
+        return pending
+
+    if cmd0 == "/weather":
+        em(cmd_weather())
+        return pending
+
+    if cmd0 == "/joke":
+        em(cmd_joke())
+        return pending
+
+    if pending is not None:
+        if not line:
+            em("Напишите уточнение или нажмите «Готово».", VK_KB_REFINEMENT_DONE)
+            return pending
+
+        if line.lower() in REFINEMENT_DONE_CMDS:
+            em("Уточнения завершены. Можете ввести новый запрос.")
+            return None
+
+        if is_off_topic_user_input(line):
+            em(OFF_TOPIC_REDIRECT)
+            em("Уточнения завершены. Опишите новую задачу для промпта.")
+            return None
+
+        refined_user = _append_stage3_refinement(pending.stage3_user, pending.last_improver, line)
+        try:
+            last_improver = _chat_json_completion(
+                pending.client,
+                pending.model,
+                pending.system_improver,
+                refined_user,
+            )
+        except Exception as exc:
+            em(f"Ошибка уточнения промпта (этап 3): {exc}")
+            return None
+
+        em(json.dumps(last_improver, ensure_ascii=False, indent=2), VK_KB_JSON_NO_MENU)
+        em(refinement_question, VK_KB_REFINEMENT_DONE)
+        return Stage3RefinementContext(
+            stage3_user=pending.stage3_user,
+            last_improver=last_improver,
+            client=pending.client,
+            model=pending.model,
+            system_improver=pending.system_improver,
+        )
+
+    if not line:
+        em("Опишите запрос на промпт текстом или отправьте /menu.")
+        return None
+
+    if is_off_topic_user_input(line):
+        em(OFF_TOPIC_REDIRECT)
+        return None
+
+    first = _run_stages_through_first_improver(line, force_branch_1=force_branch_1)
+    if isinstance(first, str):
+        em(first)
+        return None
+
+    em(json.dumps(first.improver_data, ensure_ascii=False, indent=2), VK_KB_JSON_NO_MENU)
+    em(refinement_question, VK_KB_REFINEMENT_DONE)
+    return Stage3RefinementContext(
+        stage3_user=first.stage3_user,
+        last_improver=first.improver_data,
+        client=first.client,
+        model=first.model,
+        system_improver=first.system_improver,
+    )
+
+
+def run_prompt_pipeline(
+    user_text: str,
+    *,
+    stage3_emit: Callable[[str], None] | None = None,
+    refinement_reader: Callable[[], str | None] | None = None,
+) -> str:
+    """
+    Этап 1: классификатор (system_prompt).
+    Ветка 1: этап 2 — TEXT_EXTRACTION (в user только user_request из этапа 1);
+    этап 3 — PROMPT_IMPROVER + два JSON (исходная реплика + разбор этапа 2).
+    Итог при ветке 1: JSON этапа 3 (old_prompt, new_prompt, advantages). Иначе — заглушка.
+
+    Если передан stage3_emit (консоль), после каждого JSON этапа 3 вызывается emit(json);
+    затем вопрос про уточнение; ввод обрабатывается refinement_reader (по умолчанию read_user_message)
+    или пустой ввод завершает цикл.
+    """
+    first = _run_stages_through_first_improver(user_text, force_branch_1=False)
+    if isinstance(first, str):
+        return first
+
+    improver_data = first.improver_data
+    stage3_user = first.stage3_user
+    client = first.client
+    model = first.model
+    system_improver = first.system_improver
+
     out_json = json.dumps(improver_data, ensure_ascii=False, indent=2)
     if stage3_emit is None:
         return out_json
 
     stage3_emit(out_json)
     last_improver: dict[str, Any] = improver_data
+    _reader = refinement_reader if refinement_reader is not None else (lambda: read_user_message("Уточнение: "))
     while True:
-        stage3_emit("Что-то уточнить? Пустой ввод — закончить уточнения.")
-        ref = read_user_message("Уточнение: ")
+        stage3_emit(STAGE3_REFINEMENT_PROMPT_CONSOLE)
+        ref = _reader()
         if ref is None:
             break
         if not ref.strip():
+            break
+        if is_off_topic_user_input(ref):
+            stage3_emit(OFF_TOPIC_REDIRECT)
             break
         refined_user = _append_stage3_refinement(stage3_user, last_improver, ref.strip())
         try:
@@ -311,6 +605,30 @@ def format_welcome() -> str:
         "\n"
         "Команды: /menu или /start — повторить это сообщение · /help · /exit"
     )
+
+
+_WELCOME_COMMANDS_SUFFIX_VK: Final[str] = (
+    "\n\nКоманды: /menu или /start — повторить это сообщение · /help · /exit"
+)
+
+# Абзац про серые кнопки в конце приветствия VK (не дублировать через text_with_branch_stub_note).
+VK_GREY_BUTTONS_FOOTER: Final[str] = (
+    "Серые кнопки — сценарии в разработке. "
+    "Уже работают: зелёная «написать текст» или обычное текстовое описание задачи."
+)
+
+
+def format_welcome_body_vk() -> str:
+    """Текст приветствия без последней строки про команды (для VK)."""
+    full = format_welcome()
+    if full.endswith(_WELCOME_COMMANDS_SUFFIX_VK):
+        return full[: -len(_WELCOME_COMMANDS_SUFFIX_VK)].rstrip()
+    return full.rstrip()
+
+
+def format_welcome_vk_menu_message() -> str:
+    """Приветствие для VK: основной текст, затем абзац про серые кнопки."""
+    return format_welcome_body_vk() + "\n\n" + VK_GREY_BUTTONS_FOOTER
 
 
 def cmd_help() -> str:
@@ -385,6 +703,9 @@ def handle_message(
 
     if cmd == "/joke":
         return cmd_joke()
+
+    if is_off_topic_user_input(line):
+        return OFF_TOPIC_REDIRECT
 
     # Классификатор → при ветке 1 второй ИИ-вызов только с user_request
     return run_prompt_pipeline(line, stage3_emit=stage3_emit)

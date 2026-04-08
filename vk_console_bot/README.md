@@ -1,70 +1,69 @@
-# VK Console Bot — консольный прототип PromptMaster
+# VK Console Bot — логика PromptMaster
 
-Консольная версия логики бота: классификация запроса → разбор параметров текста → улучшенный промпт (JSON). Предназначена для проверки цепочки перед переносом в VK (Long Poll / Callback API).
+Модуль с промптами для OpenAI-совместимого API и консольным REPL. Та же логика подключается из **VK-бота** (`vk_echo_bot/vk_prompt_bot.py`).
 
 ## Зависимости
-
-Из каталога `vk_console_bot` или корня репозитория (если зависимости уже в общем `requirements.txt`):
 
 ```powershell
 pip install openai python-dotenv
 ```
 
+(Или общий `requirements.txt` из корня репозитория.)
+
 ## Настройка `.env`
 
-В каталоге `vk_console_bot` создайте файл `.env` (или `.env.local` поверх него):
+В `vk_console_bot/` или в корне репозитория:
 
 | Переменная | Описание |
 |------------|----------|
-| `OPENAI_API_KEY` | Ключ API (обязательно) |
-| `OPENAI_BASE_URL` | Базовый URL совместимого API (по умолчанию часто `https://api.proxyapi.ru/openai/v1`) |
-| `OPENAI_MODEL` | Модель чата (по умолчанию в коде: `gpt-4o-mini`) |
+| `OPENAI_API_KEY` | Обязательно |
+| `OPENAI_BASE_URL` | По умолчанию в коде часто proxy API |
+| `OPENAI_MODEL` | По умолчанию: `gpt-4o-mini` |
 
-## Запуск
+## Запуск консоли
 
 ```powershell
 cd путь\к\PromptMaster\vk_console_bot
 python main.py
 ```
 
-После старта: приветствие → строка ввода `Вы: `.
+Либо из **корня** репозитория: `python main.py` (обёртка переключает рабочий каталог на `vk_console_bot`).
 
-## Команды
+После старта: приветствие → ввод `Вы: `.
+
+## Команды в консоли
 
 - `/menu`, `/start`, `меню` — сброс и приветствие  
-- `/help` — краткая справка  
+- `/help` — справка  
 - `/weather`, `/joke` — заглушки  
 - `/exit`, `/quit` — выход  
 
-Любой другой текст обрабатывается как запрос на «промпт для ИИ».
+Свободный текст — сценарий пайплайна (см. ниже).
 
-## Цепочка для ветки 1 (написать текст)
+## Пайплайн (ветка 1 — «написать текст»)
 
-1. **Этап 1** — `system_prompt` из `instructions.txt`: классификатор, JSON с `detected_branch` (1–7), `user_request` и др.  
-2. **Этап 2** (только ветка 1) — `TEXT_EXTRACTION`: в user передаётся `user_request` из этапа 1; ответ — JSON с полями вроде `original_text`, `purpose`, `type`, `theme`, `audience`, `length`, `style`.  
-3. **Этап 3** — `PROMPT_IMPROVER`: в user уходят два JSON (исходное сообщение сессии + объект этапа 2); ответ — один JSON: `old_prompt`, `new_prompt`, `advantages`.
+1. **Этап 1** — `system_prompt` в `instructions.txt`: классификатор, JSON (`detected_branch` 1–7, `user_request`, …).  
+2. **Этап 2** — `TEXT_EXTRACTION`: в user передаётся `user_request`; ответ — JSON (`original_text`, `purpose`, `type`, …).  
+3. **Этап 3** — `PROMPT_IMPROVER`: два JSON в user (реплика сессии + разбор этапа 2); ответ — `old_prompt`, `new_prompt`, `advantages`.
 
-### Уточнения в консоли
+Ветки **2–7** сейчас дают единый ответ «возврат к теме» (`OFF_TOPIC_REDIRECT`), без отдельных сценариев.
 
-Если бот запущен из консоли, после вывода JSON этапа 3:
+### Уточнение промпта (консоль)
 
-1. Печатается вопрос: **«Что-то уточнить? Пустой ввод — закончить уточнения.»**  
-2. Ввод с приглашением `Уточнение: ` — непустая строка уходит в повторный вызов этапа 3 вместе с блоками `last_improver_response` и `comment_user`.  
-3. Цикл повторяется, пока пользователь не отправит **пустую** строку (Enter).  
-4. Затем выводится сообщение о завершении уточнений и снова обычный ввод `Вы: `.
+После первого JSON этапа 3 задаётся вопрос про уточнение; ввод в `Уточнение: ` уходит в повторный этап 3 (`last_improver_response` + `comment_user`). **Пустой ввод** завершает цикл. Оффтоп-эвристика (`is_off_topic_user_input`) прерывает уточнение с текстом возврата к теме.
 
-При вызове `handle_message` **без** `stage3_emit` (например, будущий VK-хендлер) возвращается один JSON этапа 3 без интерактивного цикла.
+Параметры `handle_message(..., stage3_emit=...)` и `run_prompt_pipeline(..., refinement_reader=...)` позволяют подставить другой транспорт вместо `print` / `input`.
+
+### VK-слой (без консоли)
+
+Функция **`vk_dispatch_sync(text, emit, pending, ...)`** — синхронная обработка одного сообщения: `emit(message, keyboard_kind)` для многошаговых ответов. Используются константы клавиатур (`VK_KB_BRANCH_MENU`, `VK_KB_JSON_NO_MENU`, `VK_KB_REFINEMENT_DONE`, `VK_KB_BRANCH_MENU_WELCOME`), принудительная ветка 1 — **`force_branch_1`** (обход классификатора). Текст приветствия для VK с подписью про серые кнопки: **`format_welcome_vk_menu_message()`**.
 
 ## Файлы
 
 | Файл | Назначение |
 |------|------------|
-| `main.py` | Точка входа, OpenAI-клиент, пайплайн, консольный цикл |
-| `instruction_loader.py` | Чтение блоков `ИМЯ = """..."""` из `instructions.txt` |
-| `instructions.txt` | Промпты: `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER` |
+| `main.py` | Клиент OpenAI, пайплайн, `handle_message`, консольный цикл, `vk_dispatch_sync`, эвристики оффтопа |
+| `instruction_loader.py` | Разбор `ИМЯ = """..."""` из `instructions.txt` |
+| `instructions.txt` | `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER` |
 
-Ветки классификатора **2–7** сейчас обрабатываются заглушкой; полная логика — по мере развития проекта.
-
-## Интеграция с VK (заготовка в коде)
-
-В `main.py` в комментариях указано: вместо `input()` — обработчик входящего сообщения; вместо `print` / `send_reply_to_user` — `messages.send`; при необходимости хранить состояние уточнений по `peer_id` (аналог текущего цикла `comment_user`).
+Глобальный **`SESSION`** в коде зарезервирован под будущее состояние; история переписки в нём не ведётся.

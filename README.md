@@ -1,34 +1,44 @@
-## Terminal AI Agent (OpenAI via Proxy)
+# PromptMaster
 
-### 1) Setup (Windows PowerShell)
+Репозиторий с инструментами для работы с промптами и ИИ: отдельный **консольный прототип бота** (цепочка «классификатор → разбор текста → улучшение промпта»), **VK-бот** на Long Poll и ранний **терминальный агент** (`agent.py`).
+
+## Компоненты
+
+| Каталог / файл | Назначение |
+|------------------|------------|
+| `vk_console_bot/` | Логика пайплайна, `instructions.txt`, консольный REPL. Подробнее: [vk_console_bot/README.md](vk_console_bot/README.md). |
+| `vk_echo_bot/` | Бот ВКонтакте: `vk_prompt_bot.py` (PromptMaster), `vk_echo_trial.py` (демо-эхо). Подробнее: [vk_echo_bot/README.md](vk_echo_bot/README.md). |
+| `main.py` (корень) | Запуск консольного бота из корня репозитория (переход в `vk_console_bot`). |
+| `agent.py`, `build_prompt.py`, … | Прочие скрипты проекта. |
+
+## Быстрый старт (Windows PowerShell)
+
 ```powershell
-cd D:\zero-code\PromptMaster
+cd C:\zero_code\PromptMaster
 python -m venv .venv
-. .\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### 2) Configure environment
-- Copy `env.example` to `.env` and set values:
-  - `OPENAI_API_KEY` (required)
-  - `OPENAI_BASE_URL` (default: `https://api.proxyapi.ru/openai/v1`)
-  - `OPENAI_MODEL` (default: `gpt-4o`)
-  - `AGENT_SYSTEM_PROMPT` (optional)
+- **Консольный PromptMaster** (из корня): `python main.py`  
+- **Консоль** (из каталога): `cd vk_console_bot` → `python main.py`  
+- **VK**: см. [vk_echo_bot/README.md](vk_echo_bot/README.md).
 
-### 3) Usage
-- REPL (interactive):
+## Переменные окружения
+
+- **OpenAI-совместимый API:** `OPENAI_API_KEY`, при необходимости `OPENAI_BASE_URL`, `OPENAI_MODEL` (см. примеры в `vk_console_bot/.env`, корневой `.env`).
+- **VK:** `VK_GROUP_TOKEN` или `vk_group_token` — для `vk_echo_bot`.
+
+## Персистентность и Docker
+
+Состояние VK-сессии и уточнений сейчас хранится **в памяти процесса**; после перезапуска контейнера оно теряется. Вынос в БД (PostgreSQL / SQLite на volume) запланирован отдельно.
+
+## Старый сценарий: Terminal AI Agent
+
+Интерактивный агент через `agent.py` (потоковый режим и т.д.):
+
 ```powershell
 python .\agent.py --stream
 ```
-  - Commands: `/exit` to quit, `/clear` to clear history
-  - Optional: `--system "Вы — helpful ассистент"` to set a system prompt
 
-- Single message (non-interactive):
-```powershell
-python .\agent.py -m "Привет!" --stream
-```
-
-### 4) Notes
-- Colors are enabled in TTY; use `--no-color` to disable.
-- Streaming can be toggled with `--stream`.
-
+Подробнее о переменных см. корневой `env copy.example` (шаблон) и свой `.env` (не коммитится), если используете `agent.py`.

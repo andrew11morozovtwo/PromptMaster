@@ -23,6 +23,9 @@ Thumbs.db
 
 # Secrets / Local config
 .env
+# Копии вроде .env.production, .env.backup (сам файл «.env» — строкой выше)
+.env.*
+!.env.example
 *.env.local
 
 # Local data
