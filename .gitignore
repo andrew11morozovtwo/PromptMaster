@@ -31,3 +31,7 @@ Thumbs.db
 # Local data
 data/*.json
 
+# Консоль vk_console_bot — артефакты прогона
+vk_console_bot/task_type.json
+vk_console_bot/write_text_spec.json
+
