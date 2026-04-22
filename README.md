@@ -6,7 +6,9 @@
 
 | Каталог / файл | Назначение |
 |------------------|------------|
-| `vk_console_bot/` | Логика пайплайна, `instructions.txt`, консольный REPL. Подробнее: [vk_console_bot/README.md](vk_console_bot/README.md). |
+| `vk_console_bot/` | Логика пайплайна, `instructions.txt`, консольный REPL и отдельная консоль **`task_type_classifier.py`** (ветка write_text → промпт для браузера). Подробнее: [vk_console_bot/README.md](vk_console_bot/README.md). |
+| `write_text_analyzer/` | Извлечение JSON‑спеки текста из запроса (`topic`, `goal`, `tone`, `length`, …). |
+| `promptGenerator/` | Мета‑промпт (3‑й этап): готовый текст для ChatGPT / Gemini / Claude по `write_text_spec`. |
 | `vk_echo_bot/` | Бот ВКонтакте: `vk_prompt_bot.py` (PromptMaster), `vk_echo_trial.py` (демо-эхо). Подробнее: [vk_echo_bot/README.md](vk_echo_bot/README.md). |
 | `main.py` (корень) | Запуск консольного бота из корня репозитория (переход в `vk_console_bot`). |
 | `agent.py`, `build_prompt.py`, … | Прочие скрипты проекта. |
@@ -21,6 +23,7 @@ pip install -r requirements.txt
 ```
 
 - **Консольный PromptMaster** (из корня): `python main.py`  
+- **Консольный классификатор и write_text‑пайплайн**: `cd vk_console_bot` → `python task_type_classifier.py` (см. [vk_console_bot/README.md](vk_console_bot/README.md)).  
 - **Консоль** (из каталога): `cd vk_console_bot` → `python main.py`  
 - **VK**: см. [vk_echo_bot/README.md](vk_echo_bot/README.md).
 
