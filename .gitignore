@@ -30,8 +30,12 @@ Thumbs.db
 
 # Local data
 data/*.json
+vk_prompt_bot/data/*.sqlite
+vk_prompt_bot/data/*.sqlite-*
+vk_prompt_bot/data/*.xlsx
 
 # Консоль vk_console_bot — артефакты прогона
 vk_console_bot/task_type.json
 vk_console_bot/write_text_spec.json
+vk_console_bot/instructions.txt
 

@@ -303,33 +303,8 @@ def _stub_other_branch(_classifier: dict[str, Any], _branch: int) -> str:
 STAGE3_REFINEMENT_PROMPT_CONSOLE: Final[str] = (
     "Что-то уточнить? Пустой ввод — закончить уточнения."
 )
-STAGE3_REFINEMENT_PROMPT_CONSOLE_ALL_FILLED: Final[str] = (
-    "Проверьте готовый промпт. При необходимости уточните цель, аудиторию, объём или стиль. "
-    "Пустой ввод — закончить уточнения."
-)
-STAGE3_REFINEMENT_PROMPT_CONSOLE_SUBSEQUENT: Final[str] = (
-    "Нужно что-то ещё изменить в промпте? Опишите ниже одним сообщением. Пустой ввод — закончить."
-)
 STAGE3_REFINEMENT_PROMPT_VK: Final[str] = (
     "Что-то уточнить? Напишите уточнение к промпту или нажмите «Готово», чтобы закончить."
-)
-# Первый цикл уточнения: модель заполнила все поля TEXT_EXTRACTION — всё равно конкретное приглашение проверить промпт.
-STAGE3_REFINEMENT_PROMPT_VK_ALL_FILLED: Final[str] = (
-    "Проверьте готовый промпт. При необходимости уточните цель, аудиторию, объём или стиль "
-    "одним сообщением или нажмите «Готово», если всё устраивает."
-)
-STAGE3_REFINEMENT_PROMPT_VK_SUBSEQUENT: Final[str] = (
-    "Нужно что-то ещё изменить в промпте? Напишите одним сообщением или нажмите «Готово»."
-)
-
-# Поля разбора TEXT_EXTRACTION (instructions.txt): подписи для вопроса о недостающих параметрах.
-_TEXT_EXTRACTION_PARAM_LABELS: Final[tuple[tuple[str, str], ...]] = (
-    ("purpose", "цель и место использования текста"),
-    ("type", "тип текста"),
-    ("theme", "тема"),
-    ("audience", "аудитория"),
-    ("length", "объём"),
-    ("style", "стиль"),
 )
 
 # Метки клавиатуры для vk_dispatch_sync (второй аргумент emit).
@@ -365,8 +340,6 @@ class Stage3RefinementContext:
     client: Any
     model: str
     system_improver: str
-    text_params: dict[str, Any]
-    post_improver_index: int
 
 
 @dataclass(frozen=True)
@@ -376,94 +349,6 @@ class _FirstImproverOk:
     client: Any
     model: str
     system_improver: str
-    text_params: dict[str, Any]
-
-
-_PLACEHOLDER_TREATED_AS_MISSING: Final[frozenset[str]] = frozenset(
-    {
-        "",
-        "null",
-        "none",
-        "n/a",
-        "na",
-        "—",
-        "-",
-        "…",
-        "...",
-        "не указано",
-        "неизвестно",
-        "не указан",
-        "не указана",
-        "не указаны",
-        "unspecified",
-    }
-)
-
-
-def _is_missing_text_param(value: Any) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, str):
-        t = value.strip().lower()
-        if not t:
-            return True
-        if t in _PLACEHOLDER_TREATED_AS_MISSING:
-            return True
-        return False
-    return False
-
-
-def _missing_params_question_text(text_params: dict[str, Any]) -> str | None:
-    """Текст с перечислением незаполненных полей разбора текста; None — все поля заданы."""
-    missing_labels: list[str] = []
-    for key, label in _TEXT_EXTRACTION_PARAM_LABELS:
-        if _is_missing_text_param(text_params.get(key)):
-            missing_labels.append(label)
-    if not missing_labels:
-        return None
-    if len(missing_labels) == 1:
-        head = f"Не указан параметр: {missing_labels[0]}."
-    else:
-        head = "Не полностью заданы параметры: " + ", ".join(missing_labels) + "."
-    return head
-
-
-def _vk_refinement_followup_question(text_params: dict[str, Any], post_improver_index: int) -> str:
-    """Первый ответ ИИ (index 1): вопрос по недостающим полям; далее — короткий текст про доработку."""
-    if post_improver_index <= 1:
-        concrete = _missing_params_question_text(text_params)
-        if concrete:
-            return (
-                concrete
-                + "\n\nУточните одним сообщением, что добавить к запросу "
-                "(или нажмите «Готово», если готовый промпт вас устраивает)."
-            )
-        return STAGE3_REFINEMENT_PROMPT_VK_ALL_FILLED
-    return STAGE3_REFINEMENT_PROMPT_VK_SUBSEQUENT
-
-
-def _console_refinement_followup_question(text_params: dict[str, Any], post_improver_index: int) -> str:
-    if post_improver_index <= 1:
-        concrete = _missing_params_question_text(text_params)
-        if concrete:
-            return concrete + "\n\nПустой ввод — закончить уточнения."
-        return STAGE3_REFINEMENT_PROMPT_CONSOLE_ALL_FILLED
-    return STAGE3_REFINEMENT_PROMPT_CONSOLE_SUBSEQUENT
-
-
-def _improver_output_for_user(data: dict[str, Any]) -> str:
-    """
-    Сообщение пользователю после этапа 3: только поле new_prompt.
-    Если поля нет или оно не строка — весь JSON (для отладки / нетипичный ответ модели).
-    """
-    v = data.get("new_prompt")
-    if isinstance(v, str):
-        return v.strip()
-    if v is not None and not isinstance(v, str):
-        return str(v).strip()
-    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 def _run_stages_through_first_improver(
@@ -547,7 +432,6 @@ def _run_stages_through_first_improver(
         client=client,
         model=model,
         system_improver=system_improver,
-        text_params=text_data,
     )
 
 
@@ -556,12 +440,13 @@ def vk_dispatch_sync(
     emit: Callable[[str, str], None],
     pending: Stage3RefinementContext | None,
     *,
+    refinement_question: str = STAGE3_REFINEMENT_PROMPT_VK,
     force_branch_1: bool = False,
 ) -> Stage3RefinementContext | None:
     """
     Обработка одного сообщения в VK-сессии. Ответы через emit(text, keyboard_key):
-    VK_KB_BRANCH_MENU — меню веток; VK_KB_JSON_NO_MENU — текст поля new_prompt без кнопок;
-    VK_KB_REFINEMENT_DONE — вопрос про уточнение (после первого результата — про недостающие параметры разбора текста) и кнопка «Готово».
+    VK_KB_BRANCH_MENU — меню веток; VK_KB_JSON_NO_MENU — ответ с промптом (JSON) без кнопок;
+    VK_KB_REFINEMENT_DONE — вопрос про уточнение и одна кнопка «Готово».
     """
     line = (text or "").strip()
     cmd0 = line.split()[0].lower() if line else ""
@@ -611,17 +496,14 @@ def vk_dispatch_sync(
             em(f"Ошибка уточнения промпта (этап 3): {exc}")
             return None
 
-        em(_improver_output_for_user(last_improver), VK_KB_JSON_NO_MENU)
-        next_pi = pending.post_improver_index + 1
-        em(_vk_refinement_followup_question(pending.text_params, next_pi), VK_KB_REFINEMENT_DONE)
+        em(json.dumps(last_improver, ensure_ascii=False, indent=2), VK_KB_JSON_NO_MENU)
+        em(refinement_question, VK_KB_REFINEMENT_DONE)
         return Stage3RefinementContext(
             stage3_user=pending.stage3_user,
             last_improver=last_improver,
             client=pending.client,
             model=pending.model,
             system_improver=pending.system_improver,
-            text_params=pending.text_params,
-            post_improver_index=next_pi,
         )
 
     if not line:
@@ -637,16 +519,14 @@ def vk_dispatch_sync(
         em(first)
         return None
 
-    em(_improver_output_for_user(first.improver_data), VK_KB_JSON_NO_MENU)
-    em(_vk_refinement_followup_question(first.text_params, 1), VK_KB_REFINEMENT_DONE)
+    em(json.dumps(first.improver_data, ensure_ascii=False, indent=2), VK_KB_JSON_NO_MENU)
+    em(refinement_question, VK_KB_REFINEMENT_DONE)
     return Stage3RefinementContext(
         stage3_user=first.stage3_user,
         last_improver=first.improver_data,
         client=first.client,
         model=first.model,
         system_improver=first.system_improver,
-        text_params=first.text_params,
-        post_improver_index=1,
     )
 
 
@@ -660,9 +540,9 @@ def run_prompt_pipeline(
     Этап 1: классификатор (system_prompt).
     Ветка 1: этап 2 — TEXT_EXTRACTION (в user только user_request из этапа 1);
     этап 3 — PROMPT_IMPROVER + два JSON (исходная реплика + разбор этапа 2).
-    Итог при ветке 1: пользователю показывается только new_prompt из ответа этапа 3. Иначе — заглушка.
+    Итог при ветке 1: JSON этапа 3 (old_prompt, new_prompt, advantages). Иначе — заглушка.
 
-    Если передан stage3_emit (консоль), после каждого ответа этапа 3 вызывается emit(new_prompt);
+    Если передан stage3_emit (консоль), после каждого JSON этапа 3 вызывается emit(json);
     затем вопрос про уточнение; ввод обрабатывается refinement_reader (по умолчанию read_user_message)
     или пустой ввод завершает цикл.
     """
@@ -676,17 +556,15 @@ def run_prompt_pipeline(
     model = first.model
     system_improver = first.system_improver
 
-    out_text = _improver_output_for_user(improver_data)
+    out_json = json.dumps(improver_data, ensure_ascii=False, indent=2)
     if stage3_emit is None:
-        return out_text
+        return out_json
 
-    stage3_emit(out_text)
+    stage3_emit(out_json)
     last_improver: dict[str, Any] = improver_data
-    text_params_snapshot = first.text_params
-    post_improver_index = 1
     _reader = refinement_reader if refinement_reader is not None else (lambda: read_user_message("Уточнение: "))
     while True:
-        stage3_emit(_console_refinement_followup_question(text_params_snapshot, post_improver_index))
+        stage3_emit(STAGE3_REFINEMENT_PROMPT_CONSOLE)
         ref = _reader()
         if ref is None:
             break
@@ -700,41 +578,38 @@ def run_prompt_pipeline(
             last_improver = _chat_json_completion(client, model, system_improver, refined_user)
         except Exception as exc:
             return f"Ошибка уточнения промпта (этап 3): {exc}"
-        stage3_emit(_improver_output_for_user(last_improver))
-        post_improver_index += 1
+        stage3_emit(json.dumps(last_improver, ensure_ascii=False, indent=2))
 
     return "Уточнения завершены. Можете ввести новый запрос или /menu."
 
 
-# Общий текст приветствия (консоль и VK). Без строки «Команды…» и без абзаца про серые кнопки — их добавляют отдельно.
-_WELCOME_BODY: Final[str] = (
-    "Привет! Я создаю «промпты» (запросы) для ИИ, чтобы другие нейросети выдавали именно то, что вам нужно.\n"
-    "\n"
-    "Просто опишите задачу:\n"
-    "• «Хочу статью о Python для новичков»\n"
-    "• «Нужна картинка космического корабля»\n"
-    "• «Напиши код бота для Telegram»\n"
-    "• «Объясни квантовую физику простыми словами»\n"
-    "\n"
-    "Я сделаю «готовый промпт», который вы скопируете и вставите в ChatGPT, Midjourney или любой другой ИИ.\n"
-    "\n"
-    "Можете добавить:\n"
-    "- Для кого (школьники, разработчики...)\n"
-    "- Длина (500 слов, 10 слайдов...)\n"
-    "- Где использовать (сайт, Telegram...)\n"
-    "\n"
-    "Что за промпт нужен?"
-)
+def format_welcome() -> str:
+    """Приветствие и приглашение сформулировать запрос на промпт."""
+    return (
+        "Привет! Я создаю «промпты» (запросы) для ИИ, чтобы другие нейросети выдавали именно то, что вам нужно.\n"
+        "\n"
+        "Просто опишите задачу:\n"
+        '• «Хочу статью о Python для новичков»\n'
+        '• «Нужна картинка космического корабля»\n'
+        '• «Напиши код бота для Telegram»\n'
+        '• «Объясни квантовую физику простыми словами»\n'
+        "\n"
+        "Я сделаю «готовый промпт», который вы скопируете и вставите в ChatGPT, Midjourney или любой другой ИИ.\n"
+        "\n"
+        "Можете добавить:\n"
+        "- Для кого (школьники, разработчики...)\n"
+        "- Длина (500 слов, 10 слайдов...)\n"
+        "- Где использовать (сайт, Telegram...)\n"
+        "\n"
+        "Что за промпт нужен?\n"
+        "\n"
+        "Команды: /menu или /start — повторить это сообщение · /help · /exit"
+    )
 
-_WELCOME_COMMANDS_SUFFIX_CONSOLE: Final[str] = (
+
+_WELCOME_COMMANDS_SUFFIX_VK: Final[str] = (
     "\n\nКоманды: /menu или /start — повторить это сообщение · /help · /exit"
 )
-
-
-def format_welcome() -> str:
-    """Приветствие и приглашение сформулировать запрос на промпт (консоль: со строкой команд)."""
-    return _WELCOME_BODY + _WELCOME_COMMANDS_SUFFIX_CONSOLE
-
 
 # Абзац про серые кнопки в конце приветствия VK (не дублировать через text_with_branch_stub_note).
 VK_GREY_BUTTONS_FOOTER: Final[str] = (
@@ -744,12 +619,15 @@ VK_GREY_BUTTONS_FOOTER: Final[str] = (
 
 
 def format_welcome_body_vk() -> str:
-    """Текст приветствия для VK без абзаца про серые кнопки и без строки команд консоли."""
-    return _WELCOME_BODY
+    """Текст приветствия без последней строки про команды (для VK)."""
+    full = format_welcome()
+    if full.endswith(_WELCOME_COMMANDS_SUFFIX_VK):
+        return full[: -len(_WELCOME_COMMANDS_SUFFIX_VK)].rstrip()
+    return full.rstrip()
 
 
 def format_welcome_vk_menu_message() -> str:
-    """Приветствие для VK после «Старт»: основной текст, затем абзац про серые кнопки (клавиатура — отдельно)."""
+    """Приветствие для VK: основной текст, затем абзац про серые кнопки."""
     return format_welcome_body_vk() + "\n\n" + VK_GREY_BUTTONS_FOOTER
 
 
