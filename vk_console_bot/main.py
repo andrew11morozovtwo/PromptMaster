@@ -282,6 +282,133 @@ def _build_stage3_improver_user_message(
     )
 
 
+_INTERNAL_REQUEST_MARKERS: Final[tuple[str, ...]] = (
+    "для меня",
+    "для себя",
+    "самому разобраться",
+    "сам разобраться",
+    "лично мне",
+    "мне нужно понять",
+    "просто понять",
+    "не для публикации",
+    "не для блога",
+    "не пост",
+    "индивидуально",
+)
+
+
+def is_internal_request(comment_user: str | None) -> bool:
+    """Уточнение пользователя про запрос «для себя», без внешней аудитории."""
+    if not comment_user or not str(comment_user).strip():
+        return False
+    t = comment_user.lower()
+    return any(m in t for m in _INTERNAL_REQUEST_MARKERS)
+
+
+def extract_length_from_comment(comment_user: str | None) -> str | None:
+    """
+    Пытается извлечь требование по объёму из уточнения пользователя.
+    Примеры: "5000 знаков", "до 3000 символов", "2000-3000 знаков".
+    """
+    if not comment_user:
+        return None
+    text = comment_user.lower()
+    m_range = re.search(
+        r"(\d{2,6})\s*[-–—]\s*(\d{2,6})\s*(?:знаков|символов)", text
+    )
+    if m_range:
+        a = m_range.group(1)
+        b = m_range.group(2)
+        return f"{a}-{b} знаков"
+    m_upto = re.search(r"(?:до|не\s+более)\s*(\d{2,6})\s*(?:знаков|символов)", text)
+    if m_upto:
+        return f"до {m_upto.group(1)} знаков"
+    m_plain = re.search(r"(\d{2,6})\s*(?:знаков|символов)", text)
+    if m_plain:
+        return f"до {m_plain.group(1)} знаков"
+    return None
+
+
+def apply_length_hint_from_comment(
+    spec: dict[str, Any], comment_user: str | None
+) -> dict[str, Any]:
+    """
+    Если в comment_user явно указан объём, а поле length пустое — заполняет length.
+    """
+    out = dict(spec)
+    length_hint = extract_length_from_comment(comment_user)
+    if length_hint and _is_missing_text_param(out.get("length")):
+        out["length"] = length_hint
+    return out
+
+
+def apply_internal_request_to_spec(
+    spec: dict[str, Any], comment_user: str | None
+) -> dict[str, Any]:
+    """
+    Для внутреннего запроса переписывает purpose, audience и type под объяснение
+    самому пользователю; прежний type сохраняет в type_prev (если был задан).
+    """
+    out = dict(spec)
+    if not is_internal_request(comment_user):
+        return out
+    prev_type = out.get("type")
+    if not _is_missing_text_param(prev_type):
+        out["type_prev"] = prev_type
+    out["purpose"] = (
+        "Объяснить тему самому пользователю для личного понимания и применения "
+        "(без ориентации на внешнюю публикацию)"
+    )
+    out["audience"] = (
+        "Сам автор запроса; индивидуальное изучение и разбор темы для себя"
+    )
+    out["type"] = "объяснение/гайд"
+    return out
+
+
+def maybe_adjust_type_for_explain(
+    json2: dict[str, Any], comment_user: str | None
+) -> dict[str, Any]:
+    """
+    Копия JSON 2 разбора текста; при уточнении про объяснение для себя
+    подсказывает мета-промпту смену типа на «объяснение».
+    """
+    out = dict(json2)
+    if not comment_user:
+        return out
+    comment_lower = comment_user.lower()
+    trigger_words = (
+        "объяснение",
+        "объясни мне",
+        "для меня",
+        "разбор",
+        "понять самому",
+    )
+    if any(w in comment_lower for w in trigger_words):
+        if out.get("type") is not None:
+            out["type_prev"] = out["type"]
+        out["type"] = "объяснение"
+    return out
+
+
+def build_stage3_refinement_user_message(
+    session_user_text: str,
+    text_params: dict[str, Any],
+    last_improver: dict[str, Any],
+    comment_user: str,
+) -> tuple[str, dict[str, Any]]:
+    """User-текст для этапа 3 уточнения и обновлённый JSON 2 (патчи по comment_user)."""
+    json2 = dict(text_params)
+    json2 = apply_length_hint_from_comment(json2, comment_user)
+    if is_internal_request(comment_user):
+        json2 = apply_internal_request_to_spec(json2, comment_user)
+    else:
+        json2 = maybe_adjust_type_for_explain(json2, comment_user)
+    base = _build_stage3_improver_user_message(session_user_text, json2)
+    full = _append_stage3_refinement(base, last_improver, comment_user.strip())
+    return full, json2
+
+
 def _append_stage3_refinement(
     base_stage3_user: str,
     last_improver: dict[str, Any],
@@ -298,6 +425,41 @@ def _append_stage3_refinement(
 
 def _stub_other_branch(_classifier: dict[str, Any], _branch: int) -> str:
     return OFF_TOPIC_REDIRECT
+
+
+_BRANCH6_DETECTED_LINE: Final[str] = (
+    "→ Я определил запрос как: Объяснить / разобрать тему."
+)
+_BRANCH6_CONFIRM_PROMPT: Final[str] = "Продолжаем обработку этой ветки? (y/n): "
+_BRANCH6_CANCELLED: Final[str] = (
+    "Ок, ветка 'Объяснить / разобрать тему' отменена пользователем."
+)
+_BRANCH6_STUB: Final[str] = (
+    "Пока детальная логика ветки 'Объяснить / разобрать тему' не реализована. "
+    "Возвращаюсь к ожиданию следующего запроса."
+)
+_BRANCH6_VK_NON_INTERACTIVE: Final[str] = (
+    _BRANCH6_DETECTED_LINE
+    + "\n\n"
+    "В VK пока нет подтверждения y/n в чате. Сценарий «Объяснить / разобрать тему» не продолжается. "
+    "Нажмите «написать текст» или опишите задачу в свободной форме — или дождитесь доработки этой ветки."
+)
+
+
+def _branch_6_console_confirm_flow() -> str:
+    """Консоль: print + input; возвращает \"\" чтобы не дублировать вывод в send_reply_to_user."""
+    print(_BRANCH6_DETECTED_LINE)
+    try:
+        confirm = input(_BRANCH6_CONFIRM_PROMPT).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print(_BRANCH6_CANCELLED)
+        return ""
+    if confirm not in ("y", "д", "да"):
+        print(_BRANCH6_CANCELLED)
+        return ""
+    print(_BRANCH6_STUB)
+    return ""
 
 
 STAGE3_REFINEMENT_PROMPT_CONSOLE: Final[str] = (
@@ -367,6 +529,7 @@ class Stage3RefinementContext:
     system_improver: str
     text_params: dict[str, Any]
     post_improver_index: int
+    session_user_text: str
 
 
 @dataclass(frozen=True)
@@ -377,6 +540,7 @@ class _FirstImproverOk:
     model: str
     system_improver: str
     text_params: dict[str, Any]
+    session_user_text: str
 
 
 _PLACEHOLDER_TREATED_AS_MISSING: Final[frozenset[str]] = frozenset(
@@ -413,6 +577,79 @@ def _is_missing_text_param(value: Any) -> bool:
             return True
         return False
     return False
+
+
+# Поля разбора TEXT_EXTRACTION, по которым решаем «мало данных» (кроме type).
+_SPEC_CLARIFY_KEYS: Final[tuple[str, ...]] = (
+    "theme",
+    "purpose",
+    "audience",
+    "length",
+    "style",
+)
+
+# Расширяемый список (ключ, вопрос в консоли) для clarify_spec_interactively.
+_CLARIFY_FIELD_PROMPTS: Final[tuple[tuple[str, str], ...]] = (
+    (
+        "theme",
+        "По какой теме нужен текст (кратко, о чём гайд/статья/пост)? ",
+    ),
+    (
+        "audience",
+        "Для кого это пишется (аудитория: студенты, разработчики, предприниматели, сотрудники и т.п.)? ",
+    ),
+    (
+        "purpose",
+        "Какова цель текста: объяснить, обучить, продать, мотивировать, дать инструкцию и т.п.? ",
+    ),
+    (
+        "length",
+        "Нужен короткий, средний или длинный текст? ",
+    ),
+    (
+        "style",
+        "Какой стиль вам подходит: нейтральный, деловой, дружелюбный, экспертный, другой? ",
+    ),
+)
+
+_INSUFFICIENT_SPEC_INTRO: Final[str] = (
+    "Недостаточно данных для составления качественного промпта. Пожалуйста, уточните задачу.\n"
+)
+
+
+def needs_clarification(spec: dict[str, Any]) -> bool:
+    """
+    True, если задан тип текста, но theme/purpose/audience/length/style все пустые —
+    запрос слишком краткий для осмысленного этапа улучшения промпта.
+    """
+    if not all(_is_missing_text_param(spec.get(k)) for k in _SPEC_CLARIFY_KEYS):
+        return False
+    return not _is_missing_text_param(spec.get("type"))
+
+
+def clarify_spec_interactively(spec: dict[str, Any]) -> dict[str, Any]:
+    """
+    Задаёт в консоли вопросы по полям из _CLARIFY_FIELD_PROMPTS и записывает непустые ответы в копию spec.
+    original_text и type не меняются. Пустой ввод — поле не перезаписывается.
+    """
+    out = dict(spec)
+    print(_INSUFFICIENT_SPEC_INTRO)
+    for key, prompt in _CLARIFY_FIELD_PROMPTS:
+        try:
+            ans = input(prompt).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if ans:
+            out[key] = ans
+    return out
+
+
+_INSUFFICIENT_SPEC_VK: Final[str] = (
+    "Недостаточно данных для составления качественного промпта.\n\n"
+    "Опишите в следующем сообщении: тему, аудиторию, цель, желаемый объём и стиль — "
+    "или отправьте более подробную формулировку задачи одним сообщением."
+)
 
 
 def _missing_params_question_text(text_params: dict[str, Any]) -> str | None:
@@ -470,12 +707,22 @@ def _run_stages_through_first_improver(
     user_text: str,
     *,
     force_branch_1: bool = False,
+    force_branch_6: bool = False,
+    branch6_interactive: bool = True,
+    spec_clarification_interactive: bool = True,
 ) -> str | _FirstImproverOk:
     """
     Этапы 1–3 до первого успешного ответа улучшителя; иначе строка ошибки или редирект.
 
     Если force_branch_1=True, этап классификатора пропускается (как при detected_branch=1, confidence=high);
     в TEXT_EXTRACTION уходит весь user_text.
+    Если force_branch_6=True, этап классификатора также пропускается и запрос обрабатывается как ветка explain.
+
+    branch6_interactive: для detected_branch==6 в консоли — print + input(y/n); для VK передать False
+    (одно текстовое сообщение без stdin).
+
+    spec_clarification_interactive: если needs_clarification(text_data), в консоли — вопросы input;
+    для VK False — вернуть текст без вызова улучшителя промпта.
     """
     client = build_openai_client()
     if client is None:
@@ -487,7 +734,7 @@ def _run_stages_through_first_improver(
 
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
 
-    if force_branch_1:
+    if force_branch_1 or force_branch_6:
         user_req = user_text.strip()
         if not user_req:
             return "Опишите запрос текстом."
@@ -510,7 +757,7 @@ def _run_stages_through_first_improver(
                 "Отправьте новый запрос или /menu."
             )
 
-        if branch != 1:
+        if branch not in (1, 6):
             return _stub_other_branch(cls_data, branch)
 
         user_req = cls_data.get("user_request")
@@ -530,6 +777,12 @@ def _run_stages_through_first_improver(
     except Exception as exc:
         return f"Ошибка второго этапа (разбор текста): {exc}"
 
+    if needs_clarification(text_data):
+        if spec_clarification_interactive:
+            text_data = clarify_spec_interactively(text_data)
+        else:
+            return _INSUFFICIENT_SPEC_VK
+
     try:
         system_improver = get_instruction("PROMPT_IMPROVER")
     except (FileNotFoundError, KeyError) as exc:
@@ -548,6 +801,7 @@ def _run_stages_through_first_improver(
         model=model,
         system_improver=system_improver,
         text_params=text_data,
+        session_user_text=user_text.strip(),
     )
 
 
@@ -557,6 +811,7 @@ def vk_dispatch_sync(
     pending: Stage3RefinementContext | None,
     *,
     force_branch_1: bool = False,
+    force_branch_6: bool = False,
 ) -> Stage3RefinementContext | None:
     """
     Обработка одного сообщения в VK-сессии. Ответы через emit(text, keyboard_key):
@@ -599,7 +854,12 @@ def vk_dispatch_sync(
             em("Уточнения завершены. Опишите новую задачу для промпта.")
             return None
 
-        refined_user = _append_stage3_refinement(pending.stage3_user, pending.last_improver, line)
+        refined_user, text_params_adj = build_stage3_refinement_user_message(
+            pending.session_user_text,
+            pending.text_params,
+            pending.last_improver,
+            line,
+        )
         try:
             last_improver = _chat_json_completion(
                 pending.client,
@@ -613,15 +873,19 @@ def vk_dispatch_sync(
 
         em(_improver_output_for_user(last_improver), VK_KB_JSON_NO_MENU)
         next_pi = pending.post_improver_index + 1
-        em(_vk_refinement_followup_question(pending.text_params, next_pi), VK_KB_REFINEMENT_DONE)
+        new_base = _build_stage3_improver_user_message(
+            pending.session_user_text, text_params_adj
+        )
+        em(_vk_refinement_followup_question(text_params_adj, next_pi), VK_KB_REFINEMENT_DONE)
         return Stage3RefinementContext(
-            stage3_user=pending.stage3_user,
+            stage3_user=new_base,
             last_improver=last_improver,
             client=pending.client,
             model=pending.model,
             system_improver=pending.system_improver,
-            text_params=pending.text_params,
+            text_params=text_params_adj,
             post_improver_index=next_pi,
+            session_user_text=pending.session_user_text,
         )
 
     if not line:
@@ -632,7 +896,13 @@ def vk_dispatch_sync(
         em(OFF_TOPIC_REDIRECT)
         return None
 
-    first = _run_stages_through_first_improver(line, force_branch_1=force_branch_1)
+    first = _run_stages_through_first_improver(
+        line,
+        force_branch_1=force_branch_1,
+        force_branch_6=force_branch_6,
+        branch6_interactive=False,
+        spec_clarification_interactive=False,
+    )
     if isinstance(first, str):
         em(first)
         return None
@@ -647,6 +917,7 @@ def vk_dispatch_sync(
         system_improver=first.system_improver,
         text_params=first.text_params,
         post_improver_index=1,
+        session_user_text=first.session_user_text,
     )
 
 
@@ -675,6 +946,7 @@ def run_prompt_pipeline(
     client = first.client
     model = first.model
     system_improver = first.system_improver
+    session_user_text = first.session_user_text
 
     out_text = _improver_output_for_user(improver_data)
     if stage3_emit is None:
@@ -682,7 +954,7 @@ def run_prompt_pipeline(
 
     stage3_emit(out_text)
     last_improver: dict[str, Any] = improver_data
-    text_params_snapshot = first.text_params
+    text_params_snapshot = dict(first.text_params)
     post_improver_index = 1
     _reader = refinement_reader if refinement_reader is not None else (lambda: read_user_message("Уточнение: "))
     while True:
@@ -695,7 +967,15 @@ def run_prompt_pipeline(
         if is_off_topic_user_input(ref):
             stage3_emit(OFF_TOPIC_REDIRECT)
             break
-        refined_user = _append_stage3_refinement(stage3_user, last_improver, ref.strip())
+        refined_user, text_params_snapshot = build_stage3_refinement_user_message(
+            session_user_text,
+            text_params_snapshot,
+            last_improver,
+            ref.strip(),
+        )
+        stage3_user = _build_stage3_improver_user_message(
+            session_user_text, text_params_snapshot
+        )
         try:
             last_improver = _chat_json_completion(client, model, system_improver, refined_user)
         except Exception as exc:
@@ -739,7 +1019,7 @@ def format_welcome() -> str:
 # Абзац про серые кнопки в конце приветствия VK (не дублировать через text_with_branch_stub_note).
 VK_GREY_BUTTONS_FOOTER: Final[str] = (
     "Серые кнопки — сценарии в разработке. "
-    "Уже работают: зелёная «написать текст» или обычное текстовое описание задачи."
+    "Уже работают: зелёные «написать текст», «объяснить» или обычное текстовое описание задачи."
 )
 
 
@@ -889,7 +1169,8 @@ def run_console_loop() -> None:
             print("До свидания!")
             break
 
-        send_reply_to_user(reply)
+        if reply:
+            send_reply_to_user(reply)
         # TODO VK: при необходимости здесь же обновлять клавиатуру (keyboard=...)
 
 

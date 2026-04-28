@@ -44,15 +44,15 @@ python main.py
 
 ---
 
-## Консоль классификатора и write_text (`task_type_classifier.py`)
+## Консоль классификатора (`task_type_classifier.py`)
 
-Отдельная терминальная утилита для ветки **`write_text`**: три этапа подряд без VK и без `instructions.txt`.
+Отдельная терминальная утилита с этапами классификации и генерации мета‑промптов без VK и без `instructions.txt`.
 
 | Этап | Что делает |
 |------|------------|
 | **1** | Классификация запроса → `task_type` (JSON). Сохраняется в `task_type.json`. |
-| **2** | Если `task_type == write_text`: извлечение спеки через пакет `write_text_analyzer`, интерактивное заполнение пустых полей (`topic`, `goal`, …), сохранение в **`write_text_spec.json`**. Поля **`examples`** и **`no_no`** при пустоте не спрашиваются. |
-| **3** | Мета‑промпт для браузерного ИИ: один вызов API по спеке → блок «СКОПИРУЙТЕ ЭТОТ ПРОМПТ В БРАУЗЕРНЫЙ ИИ». Логика в корне репозитория: **`promptGenerator/write_text_prompt_maker.py`**. |
+| **2** | Если `task_type == write_text`: извлечение спеки через пакет `write_text_analyzer`, интерактивное заполнение пустых полей (`topic`, `goal`, …), сохранение в **`write_text_spec.json`**. Если `task_type == explain`: извлечение `explain_spec` через отдельный system‑промпт, интерактивное заполнение (`topic`, `goal`, `audience`, `depth`, `format`, `style`), сохранение в **`explain_spec.json`**. |
+| **3** | Мета‑промпт для браузерного ИИ: для `write_text` — API‑генерация через **`promptGenerator/write_text_prompt_maker.py`**; для `explain` — сборка по шаблону через **`promptGenerator/explain_prompt_maker.py`**. |
 
 Запуск:
 
@@ -79,7 +79,7 @@ python promptGenerator/write_text_prompt_maker.py
 
 ### Артефакты и `.gitignore`
 
-Файлы **`task_type.json`** и **`write_text_spec.json`** — локальные результаты прогона; в репозитории они игнорируются (см. корневой `.gitignore`), коммитить их не нужно.
+Файлы **`task_type.json`**, **`write_text_spec.json`** и **`explain_spec.json`** — локальные результаты прогона; коммитить их не нужно.
 
 ### Связанные каталоги в корне репозитория
 
@@ -90,13 +90,17 @@ python promptGenerator/write_text_prompt_maker.py
 
 ---
 
-## Пайплайн (ветка 1 — «написать текст»)
+## Пайплайн (`main.py`, консоль и VK)
 
 1. **Этап 1** — `system_prompt` в `instructions.txt`: классификатор, JSON (`detected_branch` 1–7, `user_request`, …).  
 2. **Этап 2** — `TEXT_EXTRACTION`: в user передаётся `user_request`; ответ — JSON (`original_text`, `purpose`, `type`, …).  
 3. **Этап 3** — `PROMPT_IMPROVER`: два JSON в user (реплика сессии + разбор этапа 2); ответ — `old_prompt`, `new_prompt`, `advantages`.
 
-Ветки **2–7** сейчас дают единый ответ «возврат к теме» (`OFF_TOPIC_REDIRECT`), без отдельных сценариев.
+Сейчас полноценный pipeline работает для веток:
+- **1** — «написать текст»
+- **6** — «объяснить / разобрать тему»
+
+Остальные ветки пока возвращают `OFF_TOPIC_REDIRECT`.
 
 ### Уточнение промпта (консоль)
 
@@ -106,14 +110,18 @@ python promptGenerator/write_text_prompt_maker.py
 
 ### VK-слой (без консоли)
 
-Функция **`vk_dispatch_sync(text, emit, pending, ...)`** — синхронная обработка одного сообщения: `emit(message, keyboard_kind)` для многошаговых ответов. Используются константы клавиатур (`VK_KB_BRANCH_MENU`, `VK_KB_JSON_NO_MENU`, `VK_KB_REFINEMENT_DONE`, `VK_KB_BRANCH_MENU_WELCOME`), принудительная ветка 1 — **`force_branch_1`** (обход классификатора). Текст приветствия для VK с подписью про серые кнопки: **`format_welcome_vk_menu_message()`**.
+Функция **`vk_dispatch_sync(text, emit, pending, ...)`** — синхронная обработка одного сообщения: `emit(message, keyboard_kind)` для многошаговых ответов. Используются константы клавиатур (`VK_KB_BRANCH_MENU`, `VK_KB_JSON_NO_MENU`, `VK_KB_REFINEMENT_DONE`, `VK_KB_BRANCH_MENU_WELCOME`). Есть принудительные режимы:
+- **`force_branch_1`** — после кнопки «написать текст»
+- **`force_branch_6`** — после кнопки «объяснить»
+
+Текст приветствия для VK с подписью про рабочие/серые кнопки: **`format_welcome_vk_menu_message()`**.
 
 ## Файлы
 
 | Файл | Назначение |
 |------|------------|
 | `main.py` | Клиент OpenAI, пайплайн, `handle_message`, консольный цикл, `vk_dispatch_sync`, эвристики оффтопа |
-| `task_type_classifier.py` | Консоль: классификация → `write_text_spec` → мета‑промпт для браузерного ИИ (ветка `write_text`) |
+| `task_type_classifier.py` | Консоль: классификация → `write_text_spec`/`explain_spec` → мета‑промпт для браузерного ИИ |
 | `instruction_loader.py` | Разбор `ИМЯ = """..."""` из `instructions.txt` |
 | `instructions.txt` | `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER` |
 

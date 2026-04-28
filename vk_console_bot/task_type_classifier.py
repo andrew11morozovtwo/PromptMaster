@@ -27,6 +27,7 @@ from promptGenerator.write_text_prompt_maker import (
     generate_browser_prompt,
     print_prompt_block,
 )
+from promptGenerator.explain_prompt_maker import build_explain_browser_prompt
 from write_text_analyzer import analyze_write_text_request
 from write_text_analyzer.analyzer import _canonical_length
 
@@ -84,6 +85,62 @@ _FIELD_QUESTIONS: dict[str, str] = {
     ),
 }
 
+# Поля explain_spec, которые при пустоте уточняются в терминале.
+_EXPLAIN_INTERACTIVE_FIELDS: tuple[str, ...] = (
+    "topic",
+    "goal",
+    "audience",
+    "depth",
+    "format",
+    "style",
+)
+
+_EXPLAIN_FIELD_QUESTIONS: dict[str, str] = {
+    "topic": "По какой теме нужно объяснение? Коротко назовите предмет/вопрос:",
+    "goal": (
+        "Какова цель объяснения? Что вы хотите понять или уметь после чтения "
+        "(одной фразой):"
+    ),
+    "audience": (
+        "Для кого объяснение (уровень): сам пользователь, новичок, джун, мидл и т.п.?"
+    ),
+    "depth": (
+        "Нужная глубина: поверхностно, базово, подробно, с примерами, с формулами и т.п.?"
+    ),
+    "format": (
+        "Формат объяснения: конспект, пошаговый разбор, мини-лекция, шпаргалка, FAQ и т.п.?"
+    ),
+    "style": (
+        "Какой стиль нужен: простой, технический, разговорный, академический и т.п.?"
+    ),
+}
+
+EXPLAIN_SPEC_SYSTEM_PROMPT = """Ты — опытный инженер промптов и методист.
+
+Твоя задача — прочитать исходный запрос пользователя (он будет следующим сообщением)
+и заполнить JSON-спеку объяснения темы.
+
+Верни ТОЛЬКО один JSON-объект без комментариев и markdown.
+
+Структура JSON:
+{
+  "original_text": "полный текст запроса пользователя без изменений",
+  "topic": "что объяснить (тема/предмет) или null",
+  "goal": "какой результат объяснения нужен пользователю: что понять/научиться делать или null",
+  "audience": "кто спрашивает (уровень): сам пользователь, новичок, джун, мидл и т.п. или null",
+  "depth": "глубина: поверхностно/базово/подробно/с примерами/с формулами и т.п. или null",
+  "format": "формат объяснения: конспект, пошаговый разбор, мини-лекция, шпаргалка, FAQ и т.п. или null",
+  "style": "стиль объяснения: простой, технический, разговорный, академический и т.п. или null",
+  "no_no": "чего избегать в объяснении или null"
+}
+
+Правила:
+- original_text всегда заполняй полным текстом входного запроса без изменений.
+- Если поле явно не задано и не следует из формулировки — ставь null, не выдумывай.
+- Если пользователь явно просит объяснение "для себя", можно указывать audience = "сам пользователь".
+- Возвращай строго валидный JSON-объект верхнего уровня, без текста до/после JSON.
+"""
+
 
 def _is_field_empty(spec: dict[str, Any], key: str) -> bool:
     v = spec.get(key)
@@ -125,6 +182,43 @@ def interactive_fill_write_text_spec(spec: dict[str, Any]) -> dict[str, Any]:
         else:
             out[key] = answer
 
+    return out
+
+
+def analyze_explain_request(user_query: str, client: OpenAI, model: str) -> dict[str, Any]:
+    """Второй этап для explain: извлечь explain_spec в JSON."""
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": EXPLAIN_SPEC_SYSTEM_PROMPT},
+            {"role": "user", "content": user_query.strip()},
+        ],
+        temperature=0.2,
+        response_format={"type": "json_object"},
+    )
+    raw_content = (resp.choices[0].message.content or "").strip()
+    data = json.loads(raw_content)
+    if not isinstance(data, dict):
+        raise RuntimeError("Этап explain вернул не JSON-объект.")
+    return data
+
+
+def interactive_fill_explain_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Дополняет пустые поля explain_spec вопросами в терминале."""
+    out: dict[str, Any] = dict(spec)
+    missing = [k for k in _EXPLAIN_INTERACTIVE_FIELDS if _is_field_empty(out, k)]
+    if not missing:
+        return out
+
+    print("\n— Недостаточно данных для explain: уточняем параметры (Enter — пропуск) —")
+    for key in _EXPLAIN_INTERACTIVE_FIELDS:
+        if not _is_field_empty(out, key):
+            continue
+        question = _EXPLAIN_FIELD_QUESTIONS[key]
+        answer = input(f"\n{question}\n> ").strip()
+        out[key] = answer if answer else ""
+    if _is_field_empty(out, "no_no"):
+        out["no_no"] = None
     return out
 
 
@@ -260,6 +354,7 @@ def main() -> None:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     out_path = os.path.join(base_dir, "task_type.json")
     write_text_spec_path = os.path.join(base_dir, "write_text_spec.json")
+    explain_spec_path = os.path.join(base_dir, "explain_spec.json")
 
     while True:
         try:
@@ -317,6 +412,34 @@ def main() -> None:
                         print("⚠️ Пустой ответ модели на мета‑промпт — блок для копирования не сформирован.")
                 except Exception as meta_err:
                     print(f"❌ Ошибка третьего этапа: {meta_err}")
+            elif task_data.get("task_type") == "explain":
+                print("\n→ Ветка explain: извлекаю параметры объяснения (второй запрос к API)...")
+                explain_spec = analyze_explain_request(user_input, client, model)
+                explain_spec = interactive_fill_explain_spec(explain_spec)
+                with open(explain_spec_path, "w", encoding="utf-8") as f:
+                    json.dump(explain_spec, f, ensure_ascii=False, indent=2)
+
+                print("\n✅ Итоговые параметры explain:")
+                for key in (
+                    "topic",
+                    "goal",
+                    "audience",
+                    "depth",
+                    "format",
+                    "style",
+                    "no_no",
+                ):
+                    val = explain_spec.get(key, "")
+                    display = "(пусто)" if val in ("", None) else val
+                    print(f"   {key}: {display}")
+                print(f"   Файл сохранён: {explain_spec_path}")
+
+                print("\n→ Третий этап: мета‑промпт для объяснения (по шаблону)...")
+                explain_prompt = build_explain_browser_prompt(explain_spec)
+                if explain_prompt.strip():
+                    print_prompt_block(explain_prompt)
+                else:
+                    print("⚠️ Не удалось собрать мета‑промпт для explain (пустой результат).")
 
         except Exception as e:
             print(f"❌ Ошибка: {e}")

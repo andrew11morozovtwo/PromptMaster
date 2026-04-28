@@ -65,7 +65,6 @@ STUB_SCENARIO_BUTTONS: frozenset[str] = frozenset(
         BTN_VIDEO,
         BTN_SONG,
         BTN_CODE,
-        BTN_EXPLAIN,
         BTN_OTHER,
     }
 )
@@ -93,6 +92,9 @@ MSG_CONTINUE = (
 )
 MSG_AWAIT_TEXT_AFTER_BUTTON = (
     "Опишите задачу одним сообщением: какой текст нужен от ИИ, для кого, объём и стиль."
+)
+MSG_AWAIT_EXPLAIN_AFTER_BUTTON = (
+    "Опишите одним сообщением, что нужно объяснить: тему, желаемую глубину и стиль."
 )
 MSG_SCENARIO_IN_DEVELOPMENT = (
     "Этот сценарий в разработке. Используйте «написать текст» или опишите задачу в свободной форме."
@@ -195,7 +197,7 @@ def branch_menu_keyboard_json() -> str:
         Text(BTN_CODE),
         KeyboardButtonColor.SECONDARY,
     ).row()
-    kb.add(Text(BTN_EXPLAIN), KeyboardButtonColor.SECONDARY).add(
+    kb.add(Text(BTN_EXPLAIN), KeyboardButtonColor.POSITIVE).add(
         Text(BTN_OTHER),
         KeyboardButtonColor.SECONDARY,
     ).row()
@@ -256,6 +258,7 @@ class PeerState:
     session_active: bool = False
     refinement_pending: Stage3RefinementContext | None = None
     awaiting_branch1_prompt: bool = False
+    awaiting_explain_prompt: bool = False
     last_vk_user_id: int | None = None
     timeout_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
@@ -371,6 +374,7 @@ def main() -> None:
         st.session_active = False
         st.refinement_pending = None
         st.awaiting_branch1_prompt = False
+        st.awaiting_explain_prompt = False
         st.timeout_task = None
         await _audit(
             db,
@@ -426,6 +430,7 @@ def main() -> None:
             st.session_active = True
             st.refinement_pending = None
             st.awaiting_branch1_prompt = False
+            st.awaiting_explain_prompt = False
             await _audit(
                 db,
                 vk_user_id=uid,
@@ -452,6 +457,7 @@ def main() -> None:
             st.session_active = False
             st.refinement_pending = None
             st.awaiting_branch1_prompt = False
+            st.awaiting_explain_prompt = False
             label = "Стоп" if stripped == BTN_STOP else stripped or cmd
             await _audit(
                 db,
@@ -499,6 +505,7 @@ def main() -> None:
 
         if stripped in STUB_SCENARIO_BUTTONS:
             st.awaiting_branch1_prompt = False
+            st.awaiting_explain_prompt = False
             st.refinement_pending = None
             await _audit(
                 db,
@@ -518,6 +525,7 @@ def main() -> None:
         if stripped == BTN_WRITE_TEXT:
             st.refinement_pending = None
             st.awaiting_branch1_prompt = True
+            st.awaiting_explain_prompt = False
             await _audit(
                 db,
                 vk_user_id=uid,
@@ -529,6 +537,25 @@ def main() -> None:
             await reply_from_community(
                 message,
                 MSG_AWAIT_TEXT_AFTER_BUTTON,
+                empty_inline_keyboard_json(),
+            )
+            return
+
+        if stripped == BTN_EXPLAIN:
+            st.awaiting_branch1_prompt = False
+            st.awaiting_explain_prompt = True
+            st.refinement_pending = None
+            await _audit(
+                db,
+                vk_user_id=uid,
+                peer_id=peer_id,
+                kind=EventKind.BUTTON,
+                summary="Кнопка: объяснить",
+                payload={"label": stripped},
+            )
+            await reply_from_community(
+                message,
+                MSG_AWAIT_EXPLAIN_AFTER_BUTTON,
                 empty_inline_keyboard_json(),
             )
             return
@@ -598,6 +625,88 @@ def main() -> None:
                 raw,
                 outgoing,
                 context="branch1_write_text",
+                bill_llm=True,
+            )
+            for part, kb_kind in outgoing:
+                if part:
+                    if kb_kind == VK_KB_BRANCH_MENU_WELCOME:
+                        out_text = part
+                    elif kb_kind == VK_KB_BRANCH_MENU:
+                        out_text = text_with_branch_stub_note(part)
+                    else:
+                        out_text = part
+                    await reply_from_community(
+                        message,
+                        out_text,
+                        keyboard_json_for_vk(kb_kind),
+                    )
+            return
+
+        if st.awaiting_explain_prompt:
+            if stripped.lower() in REFINEMENT_DONE_CMDS:
+                st.awaiting_explain_prompt = False
+                await _audit(
+                    db,
+                    vk_user_id=uid,
+                    peer_id=peer_id,
+                    kind=EventKind.BUTTON,
+                    summary=f"Отмена ожидания explain: {stripped}",
+                    payload={"label": stripped},
+                )
+                await reply_from_community(
+                    message,
+                    text_with_branch_stub_note(
+                        "Ожидание объяснения отменено. Выберите «объяснить» или опишите задачу."
+                    ),
+                    branch_kb,
+                )
+                return
+            st.awaiting_explain_prompt = False
+            outgoing: list[tuple[str, str]] = []
+
+            def emit_sync_explain(chunk: str, kb: str = VK_KB_BRANCH_MENU) -> None:
+                outgoing.append((chunk, kb))
+
+            def run_dispatch_explain() -> Stage3RefinementContext | None:
+                return vk_dispatch_sync(
+                    raw,
+                    emit_sync_explain,
+                    st.refinement_pending,
+                    force_branch_6=True,
+                )
+
+            thinking_mid = await send_thinking_placeholder(peer_id)
+            try:
+                new_pending = await asyncio.to_thread(run_dispatch_explain)
+            except Exception as exc:
+                if thinking_mid is not None:
+                    await delete_community_message(peer_id, thinking_mid)
+                await _audit(
+                    db,
+                    vk_user_id=uid,
+                    peer_id=peer_id,
+                    kind=EventKind.ERROR,
+                    summary=f"Ошибка explain-пайплайна: {_snippet(str(exc), 200)}",
+                    payload={"error": str(exc), "context": "branch6_explain"},
+                )
+                await reply_from_community(
+                    message,
+                    text_with_branch_stub_note(f"Внутренняя ошибка: {exc}"),
+                    branch_kb,
+                )
+                return
+
+            if thinking_mid is not None:
+                await delete_community_message(peer_id, thinking_mid)
+
+            st.refinement_pending = new_pending
+            await _log_user_ai_turn(
+                db,
+                uid,
+                peer_id,
+                raw,
+                outgoing,
+                context="branch6_explain",
                 bill_llm=True,
             )
             for part, kb_kind in outgoing:
