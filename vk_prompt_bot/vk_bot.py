@@ -217,21 +217,41 @@ def empty_inline_keyboard_json() -> str:
     return '{"one_time":false,"inline":true,"buttons":[]}'
 
 
+def _message_id_from_send_item(item: Any) -> int | None:
+    """Один элемент ответа messages.send: dict API, int или модель vkbottle (MessagesSendUserIdsResponseItem)."""
+    if item is None:
+        return None
+    if isinstance(item, int):
+        return item
+    if isinstance(item, dict):
+        mid = item.get("message_id")
+        return int(mid) if mid is not None else None
+    mid_obj = getattr(item, "message_id", None)
+    if mid_obj is not None:
+        return int(mid_obj)
+    if hasattr(item, "model_dump"):
+        try:
+            dumped = item.model_dump()
+            if isinstance(dumped, dict):
+                mid = dumped.get("message_id")
+                return int(mid) if mid is not None else None
+        except Exception:
+            pass
+    return None
+
+
 def _message_id_from_messages_send_response(raw: Any) -> int | None:
     """Из ответа messages.send достаётся message_id первого отправленного сообщения."""
     if raw is None:
         return None
     if isinstance(raw, int):
         return raw
+    if isinstance(raw, list) and raw:
+        return _message_id_from_send_item(raw[0])
     if isinstance(raw, dict):
         r = raw.get("response", raw)
         if isinstance(r, list) and r:
-            item = r[0]
-            if isinstance(item, dict):
-                mid = item.get("message_id")
-                return int(mid) if mid is not None else None
-            if isinstance(item, int):
-                return item
+            return _message_id_from_send_item(r[0])
         if isinstance(r, int):
             return r
     resp = getattr(raw, "response", None)

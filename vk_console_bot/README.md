@@ -22,6 +22,17 @@ pip install openai python-dotenv
 | `OPENAI_BASE_URL` | По умолчанию в коде часто proxy API |
 | `OPENAI_MODEL` | По умолчанию: `gpt-4o-mini` |
 
+## Промпты (`instructions.txt`)
+
+Файл **`instructions.txt`** с промптами этапов 1–3 **не коммитится** в Git (см. корневой `.gitignore`).
+
+В репозитории лежит шаблон **`instructions.example.txt`** (переменные `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER`, **`PROMPT_IMPROVER_EXPLAIN`** для ветки «объяснить»). Скопируйте локально и доработайте под свой продукт:
+
+```powershell
+cd путь\к\PromptMaster\vk_console_bot
+Copy-Item instructions.example.txt instructions.txt
+```
+
 ## Запуск консоли
 
 ```powershell
@@ -94,7 +105,7 @@ python promptGenerator/write_text_prompt_maker.py
 
 1. **Этап 1** — `system_prompt` в `instructions.txt`: классификатор, JSON (`detected_branch` 1–7, `user_request`, …).  
 2. **Этап 2** — `TEXT_EXTRACTION`: в user передаётся `user_request`; ответ — JSON (`original_text`, `purpose`, `type`, …).  
-3. **Этап 3** — `PROMPT_IMPROVER`: два JSON в user (реплика сессии + разбор этапа 2); ответ — `old_prompt`, `new_prompt`, `advantages`.
+3. **Этап 3** — для ветки 1 — `PROMPT_IMPROVER`, для ветки 6 — `PROMPT_IMPROVER_EXPLAIN`; два JSON в user (реплика сессии + разбор этапа 2); ответ — `old_prompt`, `new_prompt`, `advantages`.
 
 Сейчас полноценный pipeline работает для веток:
 - **1** — «написать текст»
@@ -123,6 +134,6 @@ python promptGenerator/write_text_prompt_maker.py
 | `main.py` | Клиент OpenAI, пайплайн, `handle_message`, консольный цикл, `vk_dispatch_sync`, эвристики оффтопа |
 | `task_type_classifier.py` | Консоль: классификация → `write_text_spec`/`explain_spec` → мета‑промпт для браузерного ИИ |
 | `instruction_loader.py` | Разбор `ИМЯ = """..."""` из `instructions.txt` |
-| `instructions.txt` | `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER` |
+| `instructions.txt` | `TEXT_EXTRACTION`, `system_prompt`, `PROMPT_IMPROVER`, `PROMPT_IMPROVER_EXPLAIN`; шаблон в `instructions.example.txt` |
 
 Глобальный **`SESSION`** в коде зарезервирован под будущее состояние; история переписки в нём не ведётся.

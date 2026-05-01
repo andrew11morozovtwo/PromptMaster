@@ -716,7 +716,8 @@ def _run_stages_through_first_improver(
 
     Если force_branch_1=True, этап классификатора пропускается (как при detected_branch=1, confidence=high);
     в TEXT_EXTRACTION уходит весь user_text.
-    Если force_branch_6=True, этап классификатора также пропускается и запрос обрабатывается как ветка explain.
+    Если force_branch_6=True, этап классификатора также пропускается и запрос обрабатывается как ветка explain;
+    на этапе 3 используется PROMPT_IMPROVER_EXPLAIN вместо PROMPT_IMPROVER.
 
     branch6_interactive: для detected_branch==6 в консоли — print + input(y/n); для VK передать False
     (одно текстовое сообщение без stdin).
@@ -738,6 +739,7 @@ def _run_stages_through_first_improver(
         user_req = user_text.strip()
         if not user_req:
             return "Опишите запрос текстом."
+        is_explain_branch = bool(force_branch_6)
     else:
         try:
             system_cls = get_instruction("system_prompt")
@@ -760,6 +762,8 @@ def _run_stages_through_first_improver(
         if branch not in (1, 6):
             return _stub_other_branch(cls_data, branch)
 
+        is_explain_branch = branch == 6
+
         user_req = cls_data.get("user_request")
         if not isinstance(user_req, str):
             user_req = ""
@@ -770,7 +774,7 @@ def _run_stages_through_first_improver(
     try:
         system_txt = get_instruction("TEXT_EXTRACTION")
     except (FileNotFoundError, KeyError) as exc:
-        return f"Ветка 1, но не загружен TEXT_EXTRACTION: {exc}"
+        return f"Ветки 1/6: не загружен TEXT_EXTRACTION: {exc}"
 
     try:
         text_data = _chat_json_completion(client, model, system_txt, user_req)
@@ -783,10 +787,11 @@ def _run_stages_through_first_improver(
         else:
             return _INSUFFICIENT_SPEC_VK
 
+    improver_name = "PROMPT_IMPROVER_EXPLAIN" if is_explain_branch else "PROMPT_IMPROVER"
     try:
-        system_improver = get_instruction("PROMPT_IMPROVER")
+        system_improver = get_instruction(improver_name)
     except (FileNotFoundError, KeyError) as exc:
-        return f"Ветка 1: этап 2 выполнен, но не загружен PROMPT_IMPROVER: {exc}"
+        return f"Этап 3 ({improver_name}): инструкция не загружена: {exc}"
 
     stage3_user = _build_stage3_improver_user_message(user_text, text_data)
     try:
@@ -929,9 +934,9 @@ def run_prompt_pipeline(
 ) -> str:
     """
     Этап 1: классификатор (system_prompt).
-    Ветка 1: этап 2 — TEXT_EXTRACTION (в user только user_request из этапа 1);
-    этап 3 — PROMPT_IMPROVER + два JSON (исходная реплика + разбор этапа 2).
-    Итог при ветке 1: пользователю показывается только new_prompt из ответа этапа 3. Иначе — заглушка.
+    Ветки 1 и 6: этап 2 — TEXT_EXTRACTION (в user только user_request из этапа 1);
+    этап 3 — PROMPT_IMPROVER (ветка «текст») или PROMPT_IMPROVER_EXPLAIN (ветка «объяснить») + два JSON.
+    Итог при ветках 1/6: пользователю показывается только new_prompt из ответа этапа 3. Иначе — заглушка.
 
     Если передан stage3_emit (консоль), после каждого ответа этапа 3 вызывается emit(new_prompt);
     затем вопрос про уточнение; ввод обрабатывается refinement_reader (по умолчанию read_user_message)

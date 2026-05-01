@@ -25,6 +25,21 @@ pip install openai python-dotenv
 | `OPENAI_BASE_URL` | По умолчанию в коде часто proxy API |
 | `OPENAI_MODEL` | По умолчанию: `gpt-4o-mini` |
 
+## Промпты (`instructions.txt`)
+
+Файл с system-промптами пайплайна **`instructions.txt`** в этом каталоге **не коммится** в Git (см. корневой `.gitignore`).
+
+Эталон без ваших финальных текстов коммится как **`instructions.example.txt`**.
+
+Локально: скопируйте шаблон в рабочий файл и допишите промпты при необходимости:
+
+```powershell
+cd путь\к\PromptMaster\vk_console_bot_original
+Copy-Item instructions.example.txt instructions.txt
+```
+
+Активная версия приложения живёт в **`vk_console_bot/`**; его `instructions.txt` тоже в `.gitignore` — при работе только с активной копией используйте тот же приём или синхронизируйте файлы вручную.
+
 ## Запуск консоли
 
 ```powershell

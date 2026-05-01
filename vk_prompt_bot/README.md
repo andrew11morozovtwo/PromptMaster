@@ -8,7 +8,7 @@
 
 Серые кнопки — сценарии в разработке.
 
-Инструкции для моделей лежат в **`vk_console_bot/instructions.txt`** — меняйте их там для всех клиентов (консоль и VK).
+Инструкции для моделей лежат в **`vk_console_bot/instructions.txt`** (локальная копия не в Git — см. корневой `.gitignore`); шаблон для клонирования репозитория — **`vk_console_bot/instructions.example.txt`**.
 
 ## Зависимости
 
@@ -43,7 +43,7 @@ python vk_bot.py
 
 | Каталог | Назначение |
 |---------|------------|
-| `vk_console_bot/` | Активный движок: `main.py`, `instruction_loader.py`, `instructions.txt` |
+| `vk_console_bot/` | Активный движок: `main.py`, `instruction_loader.py`, `instructions.txt` (шаблон: `instructions.example.txt`) |
 | `vk_console_bot_original/` | Независимая копия консольной версии «на сохранение» |
 
 Старый путь запуска `vk_echo_bot/vk_prompt_bot.py` перенаправляет сюда для совместимости.

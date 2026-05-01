@@ -37,5 +37,8 @@ vk_prompt_bot/data/*.xlsx
 # Консоль vk_console_bot — артефакты прогона
 vk_console_bot/task_type.json
 vk_console_bot/write_text_spec.json
+vk_console_bot/explain_spec.json
 vk_console_bot/instructions.txt
+# Дубликат промптов (ветка vk_console_bot_original — не светить в репозитории)
+vk_console_bot_original/instructions.txt
 
